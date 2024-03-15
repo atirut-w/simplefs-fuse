@@ -1,20 +1,20 @@
 #include <argparse/argparse.hpp>
 #include <memory>
-#include <fstream>
+#include <cstdio>
 #include <simplefs.hpp>
 #include <cstring>
 #include <cstdint>
 #include <vector>
+#include <fuse.h>
 
-std::shared_ptr<std::fstream> image_file;
+FILE *image_file;
 Superblock superblock;
 std::vector<uint8_t> blockmap;
 NamelistEntry root;
 
 void seek(int block, int offset = 0)
 {
-    image_file->seekg((block * superblock.block_size) + offset, std::ios::beg);
-    image_file->seekp((block * superblock.block_size) + offset, std::ios::beg);
+    fseek(image_file, block * superblock.block_size + offset, SEEK_SET);
 }
 
 NamelistEntry get_namelist_entry(int id)
@@ -25,7 +25,7 @@ NamelistEntry get_namelist_entry(int id)
     int offset = (id * 128) % superblock.block_size;
     seek(2 + block, offset);
 
-    image_file->read(reinterpret_cast<char *>(&entry), sizeof(NamelistEntry));
+    fread(&entry, sizeof(NamelistEntry), 1, image_file);
     return entry;
 }
 
@@ -58,14 +58,14 @@ int main(int argc, char *argv[])
     if (!args)
         return 1;
     
-    image_file = std::make_shared<std::fstream>(args->get<std::string>("image"), std::ios::in | std::ios::out | std::ios::binary);
-    if (!image_file->is_open())
+    image_file = fopen(args->get<std::string>("image").c_str(), "rb+");
+    if (image_file == nullptr)
     {
         std::cerr << "Failed to open " << args->get<std::string>("image") << std::endl;
         return 1;
     }
 
-    image_file->read((char *)&superblock, sizeof(Superblock));
+    fread(&superblock, sizeof(Superblock), 1, image_file);
     if (memcmp(superblock.signature, "\x1bSFS", 4) != 0)
     {
         std::cerr << "Not a SimpleFS image" << std::endl;
@@ -73,9 +73,21 @@ int main(int argc, char *argv[])
     }
     seek(1);
     blockmap.resize(superblock.block_size);
-    image_file->read((char *)blockmap.data(), superblock.block_size);
+    fread(blockmap.data(), 1, superblock.block_size, image_file);
     seek(2);
-    image_file->read((char *)&root, sizeof(NamelistEntry));
+    fread(&root, sizeof(NamelistEntry), 1, image_file);
+
+    fuse_operations operations = {
+
+    };
+
+    fuse_mount(args->get<std::string>("mountpoint").c_str(), nullptr);
+    fuse *f = fuse_new(fileno(image_file), nullptr, &operations);
+
+    fuse_loop(f);
+
+    fuse_unmount(args->get<std::string>("mountpoint").c_str());
+    fuse_destroy(f);
     
     return 0;
 }
